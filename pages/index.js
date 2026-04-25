@@ -1021,7 +1021,7 @@ const NAV_ITEMS = [
   { id: "caisse",        label: "Caisse",        icon: "wallet" },
 ];
 
-function Sidebar({ tab, setTab, syncing, onRefresh }) {
+function Sidebar({ tab, setTab, syncing, onRefresh, onLogout }) {
   const [expanded, setExpanded] = useState(false);
   const W = expanded ? 220 : 64;
 
@@ -1056,14 +1056,23 @@ function Sidebar({ tab, setTab, syncing, onRefresh }) {
         })}
       </nav>
 
-      {/* Sync */}
-      <div style={{ padding: "12px 8px", borderTop: `1px solid ${T.border}` }}>
+      {/* Sync + Logout */}
+      <div style={{ padding: "12px 8px", borderTop: `1px solid ${T.border}`, display: "flex", flexDirection: "column", gap: 2 }}>
         <button onClick={onRefresh} className="nav-item"
           style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", borderRadius: 10, background: "transparent", border: "none", cursor: "pointer", color: T.text2, fontFamily: "'DM Sans', sans-serif", whiteSpace: "nowrap" }}>
           <span style={{ flexShrink: 0, animation: syncing ? "spin 0.6s linear infinite" : "none", display: "inline-flex" }}>
             <Icon name="refresh" size={16} color="currentColor" />
           </span>
           {expanded && <span style={{ fontSize: 13, fontWeight: 500 }}>{syncing ? "Synchronisation..." : "Synchroniser"}</span>}
+        </button>
+        <button onClick={onLogout} className="nav-item"
+          style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", borderRadius: 10, background: "transparent", border: "none", cursor: "pointer", color: T.red, fontFamily: "'DM Sans', sans-serif", whiteSpace: "nowrap" }}>
+          <span style={{ flexShrink: 0, display: "inline-flex" }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+            </svg>
+          </span>
+          {expanded && <span style={{ fontSize: 13, fontWeight: 600 }}>Déconnexion</span>}
         </button>
       </div>
     </div>
@@ -1090,10 +1099,125 @@ function LoadingScreen() {
   );
 }
 
+// ── LOGIN ─────────────────────────────────────────────────────────────────────
+// ⚠️ Change this password before deploying !
+const APP_PASSWORD = "bmz2025wassel";
+const SESSION_KEY  = "bmz_auth_v1";
+
+function isAuthenticated() {
+  try { return sessionStorage.getItem(SESSION_KEY) === "ok"; } catch { return false; }
+}
+
+function LoginPage({ onLogin }) {
+  const [pwd, setPwd]     = useState("");
+  const [error, setError] = useState(false);
+  const [shake, setShake] = useState(false);
+  const [show, setShow]   = useState(false);
+
+  const handleSubmit = () => {
+    if (pwd === APP_PASSWORD) {
+      try { sessionStorage.setItem(SESSION_KEY, "ok"); } catch {}
+      onLogin();
+    } else {
+      setError(true);
+      setShake(true);
+      setTimeout(() => setShake(false), 500);
+    }
+  };
+
+  return (
+    <div style={{ minHeight: "100vh", background: T.bg0, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <style>{`
+        @keyframes loginShake {
+          0%,100% { transform: translateX(0); }
+          20%,60%  { transform: translateX(-8px); }
+          40%,80%  { transform: translateX(8px); }
+        }
+        @keyframes loginFadeUp {
+          from { opacity:0; transform:translateY(24px); }
+          to   { opacity:1; transform:translateY(0); }
+        }
+        .login-box { animation: loginFadeUp 0.5s ease both; }
+        .login-shake { animation: loginShake 0.4s ease; }
+      `}</style>
+
+      {/* Background grid decoration */}
+      <div style={{ position: "fixed", inset: 0, backgroundImage: `radial-gradient(circle at 50% 50%, rgba(14,165,233,0.06) 0%, transparent 70%)`, pointerEvents: "none" }} />
+      <div style={{ position: "fixed", inset: 0, backgroundImage: `linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px)`, backgroundSize: "40px 40px", pointerEvents: "none" }} />
+
+      <div className={`login-box ${shake ? "login-shake" : ""}`}
+        style={{ width: "100%", maxWidth: 400, background: "rgba(12,16,32,0.95)", border: `1px solid ${error ? "rgba(239,68,68,0.4)" : T.glassBorder}`, borderRadius: 20, padding: "40px 36px", backdropFilter: "blur(20px)", boxShadow: `0 24px 64px rgba(0,0,0,0.6), 0 0 0 1px ${error ? "rgba(239,68,68,0.1)" : "rgba(14,165,233,0.05)"}`, transition: "border-color 0.3s" }}>
+
+        {/* Logo */}
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginBottom: 36 }}>
+          <div style={{ width: 60, height: 60, borderRadius: 16, background: `linear-gradient(135deg, ${T.gold}, #F97316)`, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: `0 0 30px rgba(245,158,11,0.35)`, marginBottom: 16 }}>
+            <span style={{ fontSize: 24, fontWeight: 900, color: "#000", fontFamily: "'Syne', sans-serif" }}>B</span>
+          </div>
+          <div style={{ fontSize: 20, fontWeight: 900, color: T.text0, fontFamily: "'Syne', sans-serif", letterSpacing: 1 }}>BMZ AUTO SERVICES</div>
+          <div style={{ fontSize: 11, color: T.text2, letterSpacing: 2, textTransform: "uppercase", marginTop: 4 }}>Accès sécurisé · Ariana</div>
+        </div>
+
+        {/* Form */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 700, color: T.text2, textTransform: "uppercase", letterSpacing: 1, display: "block", marginBottom: 8 }}>
+              Mot de passe
+            </label>
+            <div style={{ position: "relative" }}>
+              <input
+                type={show ? "text" : "password"}
+                value={pwd}
+                onChange={e => { setPwd(e.target.value); setError(false); }}
+                onKeyDown={e => e.key === "Enter" && handleSubmit()}
+                placeholder="Entrez votre mot de passe"
+                autoFocus
+                style={{ width: "100%", padding: "12px 44px 12px 14px", background: "rgba(255,255,255,0.04)", border: `1px solid ${error ? "rgba(239,68,68,0.5)" : T.border}`, borderRadius: 10, fontSize: 14, color: T.text0, fontFamily: "'DM Sans', sans-serif", outline: "none", boxSizing: "border-box", transition: "border-color 0.2s", letterSpacing: show ? 0 : 3 }}
+              />
+              <button onClick={() => setShow(s => !s)}
+                style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: T.text2, display: "flex", alignItems: "center", padding: 4 }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+                  {show
+                    ? <><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></>
+                    : <><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></>}
+                </svg>
+              </button>
+            </div>
+            {error && (
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, color: T.red, fontSize: 12, fontWeight: 600 }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                Mot de passe incorrect
+              </div>
+            )}
+          </div>
+
+          <button onClick={handleSubmit}
+            style={{ width: "100%", padding: "13px", background: `linear-gradient(135deg, ${T.blue}, ${T.blueBright})`, border: "none", borderRadius: 10, color: "#fff", fontSize: 14, fontWeight: 700, fontFamily: "'DM Sans', sans-serif", cursor: "pointer", boxShadow: `0 4px 20px rgba(14,165,233,0.35)`, transition: "opacity 0.15s, transform 0.15s", marginTop: 4 }}
+            onMouseOver={e => { e.currentTarget.style.opacity = "0.9"; e.currentTarget.style.transform = "translateY(-1px)"; }}
+            onMouseOut={e => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.transform = "translateY(0)"; }}>
+            Accéder au système
+          </button>
+        </div>
+
+        <div style={{ marginTop: 28, paddingTop: 20, borderTop: `1px solid ${T.border}`, textAlign: "center", fontSize: 11, color: T.text2 }}>
+          Système réservé au manager BMZ Auto Services
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── APP ───────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [tab, setTab] = useState("dashboard");
+  const [tab, setTab]           = useState("dashboard");
+  const [authed, setAuthed]     = useState(isAuthenticated);
   const { db, loading, syncing, toast, refresh, ...ops } = useDB();
+
+  if (!authed) return (
+    <>
+      <style>{GLOBAL_CSS}</style>
+      <LoginPage onLogin={() => setAuthed(true)} />
+    </>
+  );
 
   if (loading) return (
     <>
@@ -1102,11 +1226,16 @@ export default function App() {
     </>
   );
 
+  const handleLogout = () => {
+    try { sessionStorage.removeItem(SESSION_KEY); } catch {}
+    setAuthed(false);
+  };
+
   return (
     <>
       <style>{GLOBAL_CSS}</style>
       <div style={{ display: "flex", minHeight: "100vh", background: T.bg0 }}>
-        <Sidebar tab={tab} setTab={setTab} syncing={syncing} onRefresh={refresh} />
+        <Sidebar tab={tab} setTab={setTab} syncing={syncing} onRefresh={refresh} onLogout={handleLogout} />
         <main style={{ flex: 1, marginLeft: 64, padding: "32px 36px", minHeight: "100vh", transition: "margin 0.2s" }}>
           {tab === "dashboard"     && <Dashboard db={db} setTab={setTab} />}
           {tab === "agenda"        && <Agenda db={db} ops={ops} />}
