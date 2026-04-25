@@ -342,8 +342,235 @@ function SearchBar({ value, onChange, placeholder }) {
   );
 }
 
+// ── SPRINT 1 : ALERTES INTELLIGENTES + WHATSAPP + NOTIFICATIONS ──────────────
+
+// Calcule toutes les alertes en temps réel
+function useAlerts(db) {
+  return useRef(null).current === null
+    ? (() => {
+        const alerts = [];
+        const now = new Date();
+        const todayStr = today();
+
+        // 1. Véhicules bloqués depuis +3 jours sans mise à jour
+        db.vehicules.filter(v => v.status === "cours" || v.status === "attente").forEach(v => {
+          const created = new Date(v.created_at);
+          const days = Math.floor((now - created) / 86400000);
+          if (days >= 3) {
+            const client = db.clients.find(c => c.id === v.client_id);
+            alerts.push({ id: `stuck_${v.id}`, type: "warning", title: `${v.immat} bloqué depuis ${days}j`, desc: `${v.marque} ${v.modele} — ${client?.nom || "—"}`, action: "vehicules" });
+          }
+        });
+
+        // 2. RDV dans moins de 2 heures
+        const nowH = now.getHours() * 60 + now.getMinutes();
+        db.rendez_vous.filter(r => r.date === todayStr && r.statut === "confirme").forEach(r => {
+          const [h, m] = r.heure.split(":").map(Number);
+          const rdvMin = h * 60 + m;
+          const diff = rdvMin - nowH;
+          if (diff > 0 && diff <= 120) {
+            const client = db.clients.find(c => c.id === r.client_id);
+            alerts.push({ id: `rdv_${r.id}`, type: "info", title: `RDV dans ${diff} min — ${r.heure}`, desc: `${client?.nom || "—"} · ${TYPE_MAP[r.type]}`, action: "agenda", rdv: r, client });
+          }
+        });
+
+        // 3. Clients avec crédit > 500 TND
+        db.clients.filter(c => Number(c.credit) > 500).forEach(c => {
+          alerts.push({ id: `credit_${c.id}`, type: "danger", title: `Crédit élevé — ${c.nom}`, desc: `${fmt(c.credit)} TND impayé`, action: "clients" });
+        });
+
+        // 4. Interventions sans prix réel rempli (terminées)
+        db.interventions.filter(i => i.statut === "termine" && !i.prix_reel).forEach(i => {
+          const v = db.vehicules.find(x => x.id === i.vehicle_id);
+          alerts.push({ id: `noprix_${i.id}`, type: "warning", title: `Prix réel manquant`, desc: `${TYPE_MAP[i.type]} — ${v?.immat || "—"} · ${fmtDate(i.date)}`, action: "interventions" });
+        });
+
+        // 5. RDV demain — rappel préventif
+        const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+        const tomorrowStr = tomorrow.toISOString().split("T")[0];
+        const rdvDemain = db.rendez_vous.filter(r => r.date === tomorrowStr && r.statut === "confirme");
+        if (rdvDemain.length > 0) {
+          alerts.push({ id: "rdv_demain", type: "info", title: `${rdvDemain.length} RDV demain`, desc: `Penser à confirmer avec les clients`, action: "agenda" });
+        }
+
+        return alerts;
+      })()
+    : [];
+}
+
+// Génère le lien WhatsApp pour un RDV
+function buildWhatsAppLink(rdv, client, vehicule) {
+  if (!client?.telephone) return null;
+  const phone = client.telephone.replace(/\D/g, "").replace(/^0/, "216");
+  const date  = fmtDate(rdv.date);
+  const type  = TYPE_MAP[rdv.type] || rdv.type;
+  const msg   = `Bonjour ${client.nom}, nous vous rappelons votre rendez-vous chez BMZ Auto Services le ${date} à ${rdv.heure} pour : ${type}. Merci de confirmer votre présence. — BMZ Ariana`;
+  return `https://wa.me/${phone}?text=${encodeURIComponent(msg)}`;
+}
+
+// Panneau de notifications
+function NotificationsPanel({ db, setTab, onClose }) {
+  const alerts = [];
+  const now = new Date();
+  const todayStr = today();
+
+  db.vehicules.filter(v => v.status === "cours" || v.status === "attente").forEach(v => {
+    const days = Math.floor((now - new Date(v.created_at)) / 86400000);
+    if (days >= 3) {
+      const client = db.clients.find(c => c.id === v.client_id);
+      alerts.push({ id: `stuck_${v.id}`, type: "warning", title: `${v.immat} bloqué ${days} jours`, desc: `${v.marque} ${v.modele} · ${client?.nom || "—"}`, icon: "car", action: "vehicules" });
+    }
+  });
+
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  db.rendez_vous.filter(r => r.date === todayStr && r.statut === "confirme").forEach(r => {
+    const [h, m] = r.heure.split(":").map(Number);
+    const diff = h * 60 + m - nowMin;
+    if (diff > 0 && diff <= 120) {
+      const client = db.clients.find(c => c.id === r.client_id);
+      const vehicule = db.vehicules.find(v => v.id === r.vehicle_id);
+      const waLink = buildWhatsAppLink(r, client, vehicule);
+      alerts.push({ id: `rdv_${r.id}`, type: "info", title: `RDV dans ${diff} min`, desc: `${client?.nom || "—"} à ${r.heure} · ${TYPE_MAP[r.type]}`, icon: "calendar", action: "agenda", waLink, client });
+    }
+  });
+
+  db.clients.filter(c => Number(c.credit) > 500).forEach(c => {
+    alerts.push({ id: `credit_${c.id}`, type: "danger", title: `Crédit impayé`, desc: `${c.nom} — ${fmt(c.credit)} TND`, icon: "alert", action: "clients" });
+  });
+
+  db.interventions.filter(i => i.statut === "termine" && !i.prix_reel).forEach(i => {
+    const v = db.vehicules.find(x => x.id === i.vehicle_id);
+    alerts.push({ id: `noprix_${i.id}`, type: "warning", title: `Prix réel manquant`, desc: `${TYPE_MAP[i.type]} · ${v?.immat || "—"}`, icon: "wrench", action: "interventions" });
+  });
+
+  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+  const rdvDemain = db.rendez_vous.filter(r => r.date === tomorrow.toISOString().split("T")[0] && r.statut === "confirme");
+  if (rdvDemain.length > 0) {
+    alerts.push({ id: "rdv_demain", type: "info", title: `${rdvDemain.length} RDV demain`, desc: "Penser à envoyer les rappels WhatsApp", icon: "calendar", action: "agenda" });
+  }
+
+  const COLORS = { warning: T.gold, danger: T.red, info: T.blue, success: T.green };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 200 }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()}
+        style={{ position: "fixed", top: 0, right: 0, width: 380, height: "100vh", background: "#0C1020", borderLeft: `1px solid ${T.border}`, display: "flex", flexDirection: "column", animation: "slideIn 0.25s ease", zIndex: 201 }}>
+        <div style={{ padding: "20px 22px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: T.text0, fontFamily: "'Syne', sans-serif" }}>Notifications</div>
+            <div style={{ fontSize: 11, color: T.text1, marginTop: 2 }}>{alerts.length} alerte(s) active(s)</div>
+          </div>
+          <button onClick={onClose} style={{ background: T.glass, border: `1px solid ${T.border}`, borderRadius: 8, width: 32, height: 32, cursor: "pointer", color: T.text1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Icon name="close" size={14} color="currentColor" />
+          </button>
+        </div>
+
+        <div style={{ flex: 1, overflow: "auto", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
+          {alerts.length === 0 && (
+            <div style={{ textAlign: "center", padding: "48px 20px", color: T.text2 }}>
+              <div style={{ width: 48, height: 48, borderRadius: 12, background: T.greenDim, border: `1px solid rgba(16,185,129,0.3)`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px" }}>
+                <Icon name="check" size={22} color={T.green} />
+              </div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: T.green }}>Tout est en ordre</div>
+              <div style={{ fontSize: 12, color: T.text2, marginTop: 4 }}>Aucune alerte pour le moment</div>
+            </div>
+          )}
+          {alerts.map(a => {
+            const color = COLORS[a.type] || T.text1;
+            return (
+              <div key={a.id} style={{ background: `${color}0D`, border: `1px solid ${color}30`, borderRadius: 12, padding: "14px 16px" }}>
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+                  <div style={{ width: 34, height: 34, borderRadius: 9, background: `${color}20`, border: `1px solid ${color}40`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 1 }}>
+                    <Icon name={a.icon} size={15} color={color} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: T.text0, marginBottom: 2 }}>{a.title}</div>
+                    <div style={{ fontSize: 11, color: T.text1 }}>{a.desc}</div>
+                    <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                      <button onClick={() => { setTab(a.action); onClose(); }}
+                        style={{ padding: "5px 12px", background: `${color}20`, border: `1px solid ${color}40`, borderRadius: 6, color: color, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif" }}>
+                        Voir
+                      </button>
+                      {a.waLink && (
+                        <a href={a.waLink} target="_blank" rel="noreferrer"
+                          style={{ padding: "5px 12px", background: "rgba(37,211,102,0.15)", border: "1px solid rgba(37,211,102,0.4)", borderRadius: 6, color: "#25D366", fontSize: 11, fontWeight: 700, textDecoration: "none", display: "flex", alignItems: "center", gap: 5 }}>
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="#25D366"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
+                          WhatsApp
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Section RDV du jour avec boutons WhatsApp */}
+        <div style={{ borderTop: `1px solid ${T.border}`, padding: "16px" }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: T.text2, textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>Rappels RDV aujourd'hui</div>
+          {db.rendez_vous.filter(r => r.date === todayStr && r.statut !== "annule" && r.statut !== "converti").length === 0
+            ? <div style={{ fontSize: 12, color: T.text2 }}>Aucun RDV aujourd'hui</div>
+            : db.rendez_vous.filter(r => r.date === todayStr && r.statut !== "annule" && r.statut !== "converti").sort((a, b) => a.heure.localeCompare(b.heure)).map(r => {
+              const client = db.clients.find(c => c.id === r.client_id);
+              const vehicule = db.vehicules.find(v => v.id === r.vehicle_id);
+              const waLink = buildWhatsAppLink(r, client, vehicule);
+              return (
+                <div key={r.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0", borderBottom: `1px solid ${T.border}` }}>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: T.blue }}>{r.heure}</div>
+                    <div style={{ fontSize: 12, color: T.text0 }}>{client?.nom || "—"}</div>
+                    <div style={{ fontSize: 11, color: T.text1 }}>{TYPE_MAP[r.type]}</div>
+                  </div>
+                  {waLink
+                    ? <a href={waLink} target="_blank" rel="noreferrer"
+                        style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", background: "rgba(37,211,102,0.15)", border: "1px solid rgba(37,211,102,0.4)", borderRadius: 8, color: "#25D366", fontSize: 12, fontWeight: 700, textDecoration: "none" }}>
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="#25D366"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
+                        Rappel
+                      </a>
+                    : <span style={{ fontSize: 11, color: T.text2 }}>Pas de tél.</span>}
+                </div>
+              );
+            })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Barre d'alertes rapides sous le header du dashboard
+function AlertBar({ db, setTab, onOpenNotif }) {
+  const now = new Date();
+  const todayStr = today();
+  const stuck = db.vehicules.filter(v => (v.status === "cours" || v.status === "attente") && Math.floor((now - new Date(v.created_at)) / 86400000) >= 3).length;
+  const rdvSoon = db.rendez_vous.filter(r => { const [h, m] = r.heure.split(":").map(Number); const diff = h * 60 + m - (now.getHours() * 60 + now.getMinutes()); return r.date === todayStr && r.statut === "confirme" && diff > 0 && diff <= 120; }).length;
+  const credits = db.clients.filter(c => Number(c.credit) > 500).length;
+  const noPrix = db.interventions.filter(i => i.statut === "termine" && !i.prix_reel).length;
+  const total = stuck + rdvSoon + credits + noPrix;
+  if (total === 0) return null;
+
+  return (
+    <div style={{ background: `rgba(245,158,11,0.08)`, border: `1px solid rgba(245,158,11,0.25)`, borderRadius: 10, padding: "10px 16px", marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <StatusDot color={T.gold} pulse />
+          <span style={{ fontSize: 13, fontWeight: 700, color: T.gold }}>{total} alerte(s) active(s)</span>
+        </div>
+        {stuck > 0 && <span style={{ fontSize: 12, color: T.text1, background: T.glass, border: `1px solid ${T.border}`, borderRadius: 6, padding: "2px 10px" }}>{stuck} véhicule(s) bloqué(s)</span>}
+        {rdvSoon > 0 && <span style={{ fontSize: 12, color: T.blue, background: T.blueDim, border: `1px solid ${T.blue}40`, borderRadius: 6, padding: "2px 10px" }}>{rdvSoon} RDV imminent(s)</span>}
+        {credits > 0 && <span style={{ fontSize: 12, color: T.red, background: T.redDim, border: `1px solid rgba(239,68,68,0.3)`, borderRadius: 6, padding: "2px 10px" }}>{credits} crédit(s) élevé(s)</span>}
+        {noPrix > 0 && <span style={{ fontSize: 12, color: T.text1, background: T.glass, border: `1px solid ${T.border}`, borderRadius: 6, padding: "2px 10px" }}>{noPrix} prix manquant(s)</span>}
+      </div>
+      <button onClick={onOpenNotif}
+        style={{ padding: "6px 14px", background: `rgba(245,158,11,0.2)`, border: `1px solid rgba(245,158,11,0.4)`, borderRadius: 8, color: T.gold, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", display: "flex", alignItems: "center", gap: 6 }}>
+        <Icon name="alert" size={13} color={T.gold} /> Voir tout
+      </button>
+    </div>
+  );
+}
+
 // ── DASHBOARD ─────────────────────────────────────────────────────────────────
-function Dashboard({ db, setTab }) {
+function Dashboard({ db, setTab, onOpenNotif }) {
   const todayStr = today();
   const enCours = db.vehicules.filter(v => v.status === "cours");
   const enAttente = db.vehicules.filter(v => v.status === "attente");
@@ -364,6 +591,8 @@ function Dashboard({ db, setTab }) {
           Tableau de bord
         </h1>
       </div>
+
+      <AlertBar db={db} setTab={setTab} onOpenNotif={onOpenNotif} />
 
       {/* KPIs */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 24 }}>
@@ -1021,7 +1250,7 @@ const NAV_ITEMS = [
   { id: "caisse",        label: "Caisse",        icon: "wallet" },
 ];
 
-function Sidebar({ tab, setTab, syncing, onRefresh, onLogout }) {
+function Sidebar({ tab, setTab, syncing, onRefresh, onLogout, alertCount, onOpenNotif }) {
   const [expanded, setExpanded] = useState(false);
   const W = expanded ? 220 : 64;
 
@@ -1040,6 +1269,24 @@ function Sidebar({ tab, setTab, syncing, onRefresh, onLogout }) {
             <div style={{ fontSize: 10, color: T.text2, letterSpacing: 1.5, textTransform: "uppercase" }}>Services · Ariana</div>
           </div>
         )}
+      </div>
+
+      {/* Notification bell */}
+      <div style={{ padding: "10px 8px", borderBottom: `1px solid ${T.border}` }}>
+        <button onClick={onOpenNotif} className="nav-item"
+          style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", borderRadius: 10, background: alertCount > 0 ? `rgba(245,158,11,0.1)` : "transparent", border: "none", cursor: "pointer", color: alertCount > 0 ? T.gold : T.text2, fontFamily: "'DM Sans', sans-serif", whiteSpace: "nowrap", position: "relative" }}>
+          <span style={{ flexShrink: 0, position: "relative" }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+            </svg>
+            {alertCount > 0 && (
+              <span style={{ position: "absolute", top: -4, right: -4, width: 16, height: 16, borderRadius: "50%", background: T.red, color: "#fff", fontSize: 9, fontWeight: 900, display: "flex", alignItems: "center", justifyContent: "center", animation: "pulse 2s infinite" }}>
+                {alertCount > 9 ? "9+" : alertCount}
+              </span>
+            )}
+          </span>
+          {expanded && <span style={{ fontSize: 13, fontWeight: alertCount > 0 ? 700 : 500 }}>Notifications{alertCount > 0 ? ` (${alertCount})` : ""}</span>}
+        </button>
       </div>
 
       {/* Nav */}
@@ -1210,7 +1457,18 @@ function LoginPage({ onLogin }) {
 export default function App() {
   const [tab, setTab]           = useState("dashboard");
   const [authed, setAuthed]     = useState(isAuthenticated);
+  const [notifOpen, setNotifOpen] = useState(false);
   const { db, loading, syncing, toast, refresh, ...ops } = useDB();
+
+  // Calcul alertes en temps réel
+  const now = new Date();
+  const todayStr = today();
+  const alertCount = !loading ? (
+    db.vehicules.filter(v => (v.status === "cours" || v.status === "attente") && Math.floor((now - new Date(v.created_at)) / 86400000) >= 3).length +
+    db.rendez_vous.filter(r => { const [h, m] = (r.heure || "00:00").split(":").map(Number); const diff = h * 60 + m - (now.getHours() * 60 + now.getMinutes()); return r.date === todayStr && r.statut === "confirme" && diff > 0 && diff <= 120; }).length +
+    db.clients.filter(c => Number(c.credit) > 500).length +
+    db.interventions.filter(i => i.statut === "termine" && !i.prix_reel).length
+  ) : 0;
 
   if (!authed) return (
     <>
@@ -1235,15 +1493,16 @@ export default function App() {
     <>
       <style>{GLOBAL_CSS}</style>
       <div style={{ display: "flex", minHeight: "100vh", background: T.bg0 }}>
-        <Sidebar tab={tab} setTab={setTab} syncing={syncing} onRefresh={refresh} onLogout={handleLogout} />
+        <Sidebar tab={tab} setTab={setTab} syncing={syncing} onRefresh={refresh} onLogout={handleLogout} alertCount={alertCount} onOpenNotif={() => setNotifOpen(true)} />
         <main style={{ flex: 1, marginLeft: 64, padding: "32px 36px", minHeight: "100vh", transition: "margin 0.2s" }}>
-          {tab === "dashboard"     && <Dashboard db={db} setTab={setTab} />}
+          {tab === "dashboard"     && <Dashboard db={db} setTab={setTab} onOpenNotif={() => setNotifOpen(true)} />}
           {tab === "agenda"        && <Agenda db={db} ops={ops} />}
           {tab === "clients"       && <Clients db={db} ops={ops} />}
           {tab === "vehicules"     && <Vehicules db={db} ops={ops} />}
           {tab === "interventions" && <Interventions db={db} ops={ops} />}
           {tab === "caisse"        && <Caisse db={db} ops={ops} />}
         </main>
+        {notifOpen && <NotificationsPanel db={db} setTab={v => { setTab(v); setNotifOpen(false); }} onClose={() => setNotifOpen(false)} />}
         <Toast toast={toast} />
       </div>
     </>
